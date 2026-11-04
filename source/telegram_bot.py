@@ -7,16 +7,48 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from kleinanzeigenbot import KleinanzeigenBot
 from chat_client import ChatClient
+import storage
 
 
 registered_bots_dict: Dict[int, ChatClient] = {}
 # chat ids the bot is allowed to respond to, loaded from CHAT_IDS in .env
 allowed_chat_ids: Set[int] = set()
+# path to the JSON state file, loaded from STATE_FILE in .env
+state_file: str = ""
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 # set higher logging level for httpx to avoid all GET and POST requests being logged
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def persist() -> None:
+    """Write the current chat state to the configured state file."""
+    storage.save_state(state_file, registered_bots_dict)
+
+
+def make_chat_client(chat_id: int) -> ChatClient:
+    """Create a ChatClient wired to persist on every state change."""
+    client = ChatClient(chat_id)
+    client.on_change = persist
+    return client
+
+
+async def resume_jobs(application) -> None:
+    """
+    After startup, re-schedule polling jobs for every chat that was active
+    before the last shutdown. Runs as the application's post_init hook.
+    """
+    for client in registered_bots_dict.values():
+        if client.active and len(client.registered_bots) > 0:
+            client.fetch_job = application.job_queue.run_repeating(
+                client.fetch_articles, interval=120, first=10
+            )
+            logging.info(
+                "resumed polling for chat %s (%d search(es))",
+                client.id,
+                len(client.registered_bots),
+            )
 
 
 def is_authorized(update: Update) -> bool:
@@ -59,7 +91,8 @@ async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # add the chat id to the registered ids.
-    registered_bots_dict[chat_id] = ChatClient(chat_id)
+    registered_bots_dict[chat_id] = make_chat_client(chat_id)
+    persist()
     await bot_respond(update, context, "successfully registered this chat")
 
 
@@ -256,6 +289,7 @@ async def clear_filters(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chatClient.filters.clear()
+    persist()
 
     await bot_respond(update, context, "cleared all filters")
 
@@ -279,6 +313,7 @@ async def clear_bots(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for bot in chatClient.registered_bots:
         info += f"\n- {bot.name} -- {bot.url}"
     chatClient.registered_bots.clear()
+    persist()
 
     await bot_respond(update, context, info)
 
@@ -351,9 +386,18 @@ if __name__ == "__main__":
         print("CHAT_IDS is empty. The bot would respond to nobody. Set it in your .env file.")
         raise SystemExit
 
+    state_file = os.getenv("STATE_FILE", "")
+    if not state_file:
+        logging.warning("STATE_FILE is not set; searches will not persist across restarts.")
+
+    # Load persisted chats and wire each one to persist on change.
+    registered_bots_dict = storage.load_state(state_file)
+    for client in registered_bots_dict.values():
+        client.on_change = persist
+
     logging.info("config loaded, %d allowed chat id(s), starting application", len(allowed_chat_ids))
 
-    application = ApplicationBuilder().token(token).build()
+    application = ApplicationBuilder().token(token).post_init(resume_jobs).build()
     job_queue = application.job_queue
 
     start_handler = CommandHandler("start", start)

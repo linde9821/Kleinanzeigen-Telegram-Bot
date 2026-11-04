@@ -10,13 +10,17 @@ Copy `.env.example` to `.env` in the root directory of this repo and fill in:
 
 - `TOKEN` -- your Telegram bot API token
 - `CHAT_IDS` -- a comma-separated list of the chat IDs the bot is allowed to respond to. Messages from any other chat are ignored.
+- `STATE_FILE` -- path to the JSON file where searches, filters and seen listings are persisted. For Docker Compose use `/data/state.json` (inside the mounted volume); for a local run a relative path like `data/state.json` works.
 
 ```
 TOKEN=123456:your-telegram-bot-token
 CHAT_IDS=123456789,987654321
+STATE_FILE=/data/state.json
 ```
 
 You can find your chat ID by messaging a bot like `@userinfobot`, or by inspecting the logs when the bot ignores your message.
+
+State (your searches, filters and the set of already-seen listings) is written to `STATE_FILE` and reloaded on startup, so the bot resumes where it left off after a restart. If a chat's searches were running when the bot stopped, polling is resumed automatically.
 
 ## run using Docker Compose (recommended)
 

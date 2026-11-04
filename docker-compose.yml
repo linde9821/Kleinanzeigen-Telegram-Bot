@@ -3,7 +3,11 @@ services:
     build: .
     image: python-kleinanzeigen
     container_name: kleinanzeigen-telegram-bot
-    # Inject TOKEN and CHAT_IDS from the local .env file at runtime
+    # Inject TOKEN, CHAT_IDS and STATE_FILE from the local .env file at runtime
     env_file:
       - .env
+    # Persist searches/filters/seen listings to the host so they survive restarts.
+    # STATE_FILE in .env should point inside this mounted directory, e.g. data/state.json
+    volumes:
+      - ./data:/data
     restart: unless-stopped
