@@ -1,4 +1,5 @@
 from io import BytesIO
+import json
 import logging
 import certifi
 import pycurl
@@ -6,6 +7,14 @@ import re
 from bs4 import BeautifulSoup
 
 DEFAULT_HEADERS = ["User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"]
+
+# A listing price is a short string like "1.499 €", "140 € VB", "VB",
+# "Zu verschenken" or "Preis auf Anfrage" -- used to tell the price element
+# apart from the (much longer) description text.
+PRICE_RE = re.compile(
+    r"^(?:\d[\d.]*\s*€(?:\s*VB)?|VB|Zu verschenken|Preis auf Anfrage)$",
+    re.IGNORECASE,
+)
 
 TEST_URL = "https://www.kleinanzeigen.de/s-wohnung-mieten/berlin/preis::1000/c203l3331+wohnung_mieten.verfuegbarm_i:10%2C+wohnung_mieten.verfuegbary_i:2023%2C"
 
@@ -27,19 +36,63 @@ class KleinanzeigenItem:
             # Not a real listing article (promo slot, placeholder, etc.)
             return
 
-        main = article.find("div", {"class": "aditem-main"})
-        if main is None:
-            # Article without the expected main block: skip it silently.
-            return
+        self.title = self._extract_title(article)
+        self.price = self._extract_price(article)
+        self.location = self._extract_location(article)
 
-        location_el = main.find("div", {"class": "aditem-main--top--left"})
-        price_el = main.find("p", {"class": "aditem-main--middle--price-shipping--price"})
-        title_el = main.find("h2", {"class": "text-module-begin"})
+        # A real listing must at least have a link and a title.
+        self.valid = bool(self.title and self.title != "No title")
 
-        self.title = title_el.get_text(strip=True) if title_el else "No title"
-        self.location = location_el.get_text(strip=True) if location_el else "location unknown"
-        self.price = price_el.get_text(strip=True) if price_el else "? €"
-        self.valid = True
+    @staticmethod
+    def _extract_title(article) -> str:
+        """
+        Title comes from the embedded JSON-LD block when present (stable).
+        Not every listing has JSON-LD, so fall back to the text of the ad
+        link. There are usually two /s-anzeige/ anchors -- one wrapping the
+        image (no text) and one wrapping the title -- so pick the first with
+        actual text rather than just the first anchor.
+        """
+        ld = article.find("script", {"type": "application/ld+json"})
+        if ld and ld.string:
+            try:
+                title = json.loads(ld.string).get("title")
+                if title:
+                    return title.strip()
+            except (ValueError, TypeError):
+                pass
+
+        for link in article.find_all("a", href=lambda h: h and "/s-anzeige/" in h):
+            text = link.get_text(strip=True)
+            if text:
+                return text
+
+        return "No title"
+
+    @staticmethod
+    def _extract_price(article) -> str:
+        """
+        Price is the first <p> whose text looks like a price (short and
+        matching PRICE_RE), which avoids picking up the description text.
+        """
+        for p in article.find_all("p"):
+            text = p.get_text(strip=True)
+            if text and PRICE_RE.match(text):
+                return text
+        return "? €"
+
+    @staticmethod
+    def _extract_location(article) -> str:
+        """
+        Location is the text of the container holding the location icon.
+        """
+        svg = article.find("svg", {"data-title": "locationOutline"})
+        if svg:
+            container = svg.find_parent("div")
+            if container:
+                text = container.get_text(" ", strip=True)
+                if text:
+                    return text
+        return "location unknown"
 
 
     def __eq__(self, __value: object) -> bool:
