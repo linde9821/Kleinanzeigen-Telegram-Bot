@@ -2,20 +2,48 @@ A telegram bot to scrape kleinanzeigen.de and send messages upon the discovery o
 
 # Setup
 
-## API key
+## Configuration
 
 To use this bot you need to create a telegram bot and get the API token. Find out how to do this here: https://core.telegram.org/bots#how-do-i-create-a-bot
 
-Save this token in a new file in the root directory of this repo called `token.txt`
+Copy `.env.example` to `.env` in the root directory of this repo and fill in:
 
-## run using Docker
+- `TOKEN` -- your Telegram bot API token
+- `CHAT_IDS` -- a comma-separated list of the chat IDs the bot is allowed to respond to. Messages from any other chat are ignored.
+
+```
+TOKEN=123456:your-telegram-bot-token
+CHAT_IDS=123456789,987654321
+```
+
+You can find your chat ID by messaging a bot like `@userinfobot`, or by inspecting the logs when the bot ignores your message.
+
+## run using Docker Compose (recommended)
+
+Make sure you have created your `.env` file (see Configuration above), then:
+
+```
+cd [install directory]
+docker compose up -d --build
+```
+
+The `.env` file is injected at runtime via `env_file`, so your token and chat IDs are not baked into the image.
+
+To view logs and stop:
+
+```
+docker compose logs -f
+docker compose down
+```
+
+## run using Docker (manual)
 
 To run the application in a docker container, build and run the image using the `Dockerfile`:
 
 ```
 cd [install directory]
 docker build -t python-kleinanzeigen .
-docker run -d python-kleinanzeigen
+docker run -d --env-file .env python-kleinanzeigen
 ```
 
 ## run using pyton virtual environment

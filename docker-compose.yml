@@ -1,0 +1,9 @@
+services:
+  kleinanzeigen-bot:
+    build: .
+    image: python-kleinanzeigen
+    container_name: kleinanzeigen-telegram-bot
+    # Inject TOKEN and CHAT_IDS from the local .env file at runtime
+    env_file:
+      - .env
+    restart: unless-stopped

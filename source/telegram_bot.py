@@ -1,7 +1,8 @@
 import logging
 import os
 from functools import reduce
-from typing import Dict
+from typing import Dict, Set
+from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 from kleinanzeigenbot import KleinanzeigenBot
@@ -9,13 +10,32 @@ from chat_client import ChatClient
 
 
 registered_bots_dict: Dict[int, ChatClient] = {}
-# filters = []
-# fetch_job_started = False
+# chat ids the bot is allowed to respond to, loaded from CHAT_IDS in .env
+allowed_chat_ids: Set[int] = set()
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 # set higher logging level for httpx to avoid all GET and POST requests being logged
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def is_authorized(update: Update) -> bool:
+    """
+    Check whether the chat that sent the update is allowed to use the bot.
+
+    :param update: the current update
+    :return: True if the chat id is in the configured allowlist
+    """
+    chat = update.effective_chat
+    if chat is None:
+        print("could not get id for effective_chat!")
+        return False
+
+    if chat.id not in allowed_chat_ids:
+        logging.warning("ignoring message from unauthorized chat id %s", chat.id)
+        return False
+
+    return True
 
 
 async def register(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -50,6 +70,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     :param update: [TODO:description]
     :param context: [TODO:description]
     """
+
+    if not is_authorized(update):
+        return
 
     message = f"""Welcome. This is a Telegram bot designed for faster notification when a new offer is created for a specific search on Kleinanzeigen.de.\n\n
 *How to use:*
@@ -88,6 +111,9 @@ async def get_chat_client(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         print("could not get id for effective_chat!")
         return None
     chat_id = update.effective_chat.id
+
+    if not is_authorized(update):
+        return None
 
     if not (chat_id in registered_bots_dict.keys()):
         await register(update, context)
@@ -271,6 +297,9 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def remove_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_authorized(update):
+        return
+
     args = context.args
 
     if args is None:
@@ -303,18 +332,26 @@ async def remove_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == "__main__":
 
-    # Get the Telegram API Token from token.txt
-    try:
-        with open("token.txt") as f:
-            lines = f.readlines()
-            token = lines[0].replace("\n", "")
-    except Exception as e:
-        print(
-            f"something went wrong while trying to read 'token.txt', please make sure that the file is in located in the working directory: {os.getcwd()}\n {e}"
-        )
+    # Load configuration from a .env file (see .env.example)
+    load_dotenv()
+
+    token = os.getenv("TOKEN")
+    if not token:
+        print("TOKEN is not set. Create a .env file (see .env.example) with a TOKEN entry.")
         raise SystemExit
 
-    logging.info("token read, starting application")
+    raw_chat_ids = os.getenv("CHAT_IDS", "")
+    try:
+        allowed_chat_ids = {int(cid.strip()) for cid in raw_chat_ids.split(",") if cid.strip()}
+    except ValueError:
+        print("CHAT_IDS must be a comma-separated list of integers, e.g. CHAT_IDS=123,456")
+        raise SystemExit
+
+    if not allowed_chat_ids:
+        print("CHAT_IDS is empty. The bot would respond to nobody. Set it in your .env file.")
+        raise SystemExit
+
+    logging.info("config loaded, %d allowed chat id(s), starting application", len(allowed_chat_ids))
 
     application = ApplicationBuilder().token(token).build()
     job_queue = application.job_queue
