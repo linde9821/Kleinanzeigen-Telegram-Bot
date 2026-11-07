@@ -146,9 +146,16 @@ class KleinanzeigenBot:
         self.name = name
         self.url = url
 
-        self.mainSet = self._parse_articles()
-
-        self.invalid_link_flag = len(self.mainSet) <= 0
+        # A link is only "invalid" if the page can't be fetched/parsed, not
+        # when it simply has zero listings right now. A valid search with no
+        # current results still scrapes fine and will pick up listings later.
+        try:
+            self.mainSet = self._parse_articles()
+            self.invalid_link_flag = False
+        except Exception as e:
+            logging.error("initial scrape for bot '%s' failed: %s", name, e)
+            self.mainSet = set()
+            self.invalid_link_flag = True
 
     @classmethod
     def from_state(cls, url: str, name: str, known_items: list) -> "KleinanzeigenBot":
@@ -223,6 +230,10 @@ class KleinanzeigenBot:
         """
         Get the site contents using curl and return the parsed html.
 
+        Raises on a transport error or a non-2xx HTTP status so callers can
+        tell a broken/unreachable link apart from a page that simply has no
+        listings.
+
         :return: the parsed DOM tree
         """
         buffer = BytesIO()
@@ -231,9 +242,14 @@ class KleinanzeigenBot:
         curl.setopt(pycurl.WRITEDATA, buffer)
         curl.setopt(pycurl.HTTPHEADER, DEFAULT_HEADERS)
         curl.setopt(pycurl.CAINFO, certifi.where())  # to be able to use HTTPS
+        curl.setopt(pycurl.FOLLOWLOCATION, True)
 
         curl.perform()
+        status = curl.getinfo(pycurl.RESPONSE_CODE)
         curl.close()
+
+        if status < 200 or status >= 400:
+            raise ValueError(f"unexpected HTTP status {status} for url {self.url}")
 
         body = buffer.getvalue().decode()
 
